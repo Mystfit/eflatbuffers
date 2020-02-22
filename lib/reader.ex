@@ -67,7 +67,18 @@ defmodule Eflatbuffers.Reader do
     string
   end
 
+  def read({:vector, %{type: {:union, %{name: name}}} = type}, vtable_pointer, data, schema) do
+    IO.inspect("Reading a vector of unions: #{name}")
+    << vector_offset :: unsigned-little-size(32) >> = read_from_data_buffer(vtable_pointer, data, 32)
+    vector_pointer = vtable_pointer + vector_offset
+    << _ :: binary-size(vector_pointer), vector_count :: unsigned-little-size(32), _ :: binary >> = data
+    is_scalar = Utils.scalar?(type)
+    read_vector_elements(type, is_scalar, vector_pointer + 4, vector_count, data, schema)
+  end
+
   def read({:vector, options}, vtable_pointer, data, schema) do
+    IO.inspect("Reading a vector")
+    IO.inspect(options)
     type = options.type
     << vector_offset :: unsigned-little-size(32) >> = read_from_data_buffer(vtable_pointer, data, 32)
     vector_pointer = vtable_pointer + vector_offset
@@ -87,6 +98,12 @@ defmodule Eflatbuffers.Reader do
       value_atom ->
         Atom.to_string(value_atom)
     end
+  end
+
+  def read({:union, %{ name: union_name }}, vtable_pointer, data, {tables, _options} = schema) do
+    IO.inspect("Reading a union type: #{union_name}")
+    IO.inspect(Process.info(self(), :current_stacktrace), label: "STACKTRACE")
+    throw({:error, {:not_implemented, "individual unions not supported - yet"}})
   end
 
   # read a complete table, given a pointer to the springboard
@@ -133,6 +150,7 @@ defmodule Eflatbuffers.Reader do
   end
 
   def read_table_fields(fields, vtable, data_buffer_pointer, data, schema) do
+    IO.inspect("Begin read table fields")
     read_table_fields(fields, vtable, data_buffer_pointer, data, schema, %{})
   end
 
@@ -147,8 +165,17 @@ defmodule Eflatbuffers.Reader do
   def read_table_fields([], _, _, _, _, map) do
     map
   end
+  
+  def read_table_fields([{name, {:vector, _options} = type} | fields], << data_offset :: little-size(16), vtable :: binary >>, data_buffer_pointer, data, schema, map) do
+    # %{type: {:union, %{name: :EntityTypes}}}
+    IO.inspect("Inside union vector field read: #{name}")
+    value   = read(type, data_buffer_pointer + data_offset, data, schema)
+    map_new = Map.put(map, name, value)
+    read_table_fields(fields, vtable, data_buffer_pointer, data, schema, map_new)
+  end
 
   def read_table_fields([{name, {:union, %{ name: union_name }}} | fields], << data_offset :: little-size(16), vtable :: binary >>, data_buffer_pointer, data, {tables, _options} = schema, map) do
+    IO.inspect("Reading union field: #{name}")
     # for a union byte field named $fieldname$_type is prefixed
     union_index = read({ :byte, %{ default: 0 }}, data_buffer_pointer + data_offset, data, schema)
     case union_index do
@@ -170,6 +197,7 @@ defmodule Eflatbuffers.Reader do
   # we find a null pointer
   # so we set the dafault
   def read_table_fields([{name, {:enum, options }} | fields], << 0, 0, vtable :: binary >>, data_buffer_pointer, data, {tables, _} = schema, map) do
+    IO.inspect("Reading enum field: #{name}")
     {_, enum_options} = Map.get(tables, options.name)
     {_, %{ default: default }} = enum_options.type
 
@@ -177,6 +205,7 @@ defmodule Eflatbuffers.Reader do
     read_table_fields(fields, vtable, data_buffer_pointer, data, schema, map_new)
   end
   def read_table_fields([{name, { _type, options }} | fields],     << 0, 0, vtable :: binary >>, data_buffer_pointer, data, schema, map) do
+    IO.inspect("Reading default field: #{name}")
     map_new =
     case Map.get(options, :default) do
       nil     -> map
@@ -184,10 +213,12 @@ defmodule Eflatbuffers.Reader do
     end
     read_table_fields(fields, vtable, data_buffer_pointer, data, schema, map_new)
   end
+
   def read_table_fields([{name, type} | fields], << data_offset :: little-size(16), vtable :: binary >>, data_buffer_pointer, data, schema, map) do
+    IO.inspect("Reading field: #{name}")
+    IO.inspect(type)
     value   = read(type, data_buffer_pointer + data_offset, data, schema)
     map_new = Map.put(map, name, value)
     read_table_fields(fields, vtable, data_buffer_pointer, data, schema, map_new)
   end
-
 end
